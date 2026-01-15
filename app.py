@@ -19,9 +19,12 @@ importlib.reload(src.security)
 from src.data_manager import load_excel, get_database, update_database, get_statistics
 from src.analyzer import analyze_situation
 from src.security import (
-    verify_password, change_password, is_locked_out, 
+    verify_user, change_password, is_locked_out, 
     get_failed_attempts, log_access, get_access_log,
-    is_security_enabled, MAX_FAILED_ATTEMPTS, SESSION_TIMEOUT_MINUTES
+    is_security_enabled, is_admin, register_user, user_exists,
+    admin_reset_password, get_all_users, get_user_display_name,
+    MAX_FAILED_ATTEMPTS, SESSION_TIMEOUT_MINUTES, ADMIN_USERNAME,
+    DEFAULT_USER_PASSWORD
 )
 
 # ========================
@@ -41,6 +44,12 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "auth_time" not in st.session_state:
     st.session_state.auth_time = None
+if "username" not in st.session_state:
+    st.session_state.username = None
+if "user_role" not in st.session_state:
+    st.session_state.user_role = None
+if "show_register" not in st.session_state:
+    st.session_state.show_register = False
 
 # ========================
 # Session Timeout Check
@@ -50,9 +59,12 @@ def check_session_timeout():
     if st.session_state.auth_time:
         elapsed = datetime.now() - st.session_state.auth_time
         if elapsed > timedelta(minutes=SESSION_TIMEOUT_MINUTES):
+            username = st.session_state.username
             st.session_state.authenticated = False
             st.session_state.auth_time = None
-            log_access("session_timeout")
+            st.session_state.username = None
+            st.session_state.user_role = None
+            log_access("session_timeout", username or "")
             return True
     return False
 
@@ -60,7 +72,7 @@ def check_session_timeout():
 # Login Screen
 # ========================
 def show_login_screen():
-    """Display the login screen"""
+    """Display the login screen with username and password"""
     st.markdown("""
     <style>
         .login-container {
@@ -72,62 +84,80 @@ def show_login_screen():
             box-shadow: 0 4px 20px rgba(0,0,0,0.1);
             text-align: center;
         }
-        .login-title {
-            color: #1b5e20;
-            font-size: 28px;
-            margin-bottom: 20px;
-        }
-        .security-warning {
-            color: #d32f2f;
-            font-size: 12px;
-            margin-top: 15px;
-        }
     </style>
     """, unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown("### 🔐 ログイン")
-        st.write("このアプリはパスワードで保護されています。")
-        
-        # Check lockout
-        locked, remaining = is_locked_out()
-        if locked:
-            st.error(f"🚫 セキュリティロック中です。あと {remaining} 分お待ちください。")
-            st.caption("連続してログインに失敗したため、一時的にロックされています。")
+        # Toggle between login and register
+        if st.session_state.show_register:
+            show_register_screen()
             return
         
-        # Show failed attempts warning
-        failed = get_failed_attempts()
-        if failed > 0:
-            st.warning(f"⚠️ ログイン失敗: {failed}/{MAX_FAILED_ATTEMPTS} 回")
+        st.markdown("### 🔐 ログイン")
+        st.write("ユーザー名とパスワードを入力してください。")
         
-        # Password input with HTML form for browser password save
-        # Using a form with proper autocomplete attributes
         with st.form("login_form"):
-            password = st.text_input(
-                "パスワード", 
-                type="password", 
-                key="login_password",
-                help="Chromeにパスワードを保存するには、ログイン後にブラウザの鍵アイコンをクリックしてください"
-            )
+            username = st.text_input("ユーザー名", key="login_username")
+            password = st.text_input("パスワード", type="password", key="login_password")
             
             submitted = st.form_submit_button("🔑 ログイン", use_container_width=True, type="primary")
             
             if submitted:
-                if verify_password(password):
-                    st.session_state.authenticated = True
-                    st.session_state.auth_time = datetime.now()
-                    st.rerun()
+                if username and password:
+                    # Check lockout
+                    locked, remaining = is_locked_out(username)
+                    if locked:
+                        st.error(f"🚫 アカウントがロックされています。あと {remaining} 分お待ちください。")
+                    else:
+                        success, role = verify_user(username, password)
+                        if success:
+                            st.session_state.authenticated = True
+                            st.session_state.auth_time = datetime.now()
+                            st.session_state.username = username
+                            st.session_state.user_role = role
+                            st.rerun()
+                        else:
+                            failed = get_failed_attempts(username)
+                            st.error(f"ユーザー名またはパスワードが正しくありません ({failed}/{MAX_FAILED_ATTEMPTS})")
                 else:
-                    st.error("パスワードが正しくありません")
+                    st.error("ユーザー名とパスワードを入力してください")
         
         st.markdown("---")
-        st.caption("🔒 初期パスワード: `tactics2026`")
-        st.caption("ログイン後、設定からパスワードを変更してください。")
         
-        # Tip for password saving
-        st.info("💡 **Chromeにパスワードを保存するには:**\n1. ログイン後、アドレスバー右の🔑アイコンをクリック\n2. 「保存」を選択")
+        if st.button("📝 新規ユーザー登録", use_container_width=True):
+            st.session_state.show_register = True
+            st.rerun()
+        
+        st.caption("⚠️ パスワードを忘れた場合は管理者に連絡してください")
+
+def show_register_screen():
+    """Display user registration screen"""
+    st.markdown("### 📝 新規ユーザー登録")
+    st.write("新しいアカウントを作成します。")
+    
+    with st.form("register_form"):
+        new_username = st.text_input("ユーザー名（3文字以上）", key="reg_username")
+        
+        st.caption(f"※ 初期パスワードは `{DEFAULT_USER_PASSWORD}` です。ログイン後に変更してください。")
+        
+        submitted = st.form_submit_button("✅ 登録する", use_container_width=True, type="primary")
+        
+        if submitted:
+            if new_username:
+                success, message = register_user(new_username)
+                if success:
+                    st.success(message)
+                    st.info(f"ユーザー名: `{new_username}`\n初期パスワード: `{DEFAULT_USER_PASSWORD}`")
+                    st.session_state.show_register = False
+                else:
+                    st.error(message)
+            else:
+                st.error("ユーザー名を入力してください")
+    
+    if st.button("← ログイン画面に戻る"):
+        st.session_state.show_register = False
+        st.rerun()
 
 # ========================
 # Security Check Gate
@@ -297,18 +327,22 @@ with st.sidebar:
     
     # 🔐 Logout & Security Section
     st.markdown("---")
-    st.subheader("🔐 セキュリティ")
+    current_user = st.session_state.username
+    is_current_admin = is_admin(current_user) if current_user else False
+    
+    st.subheader(f"👤 {get_user_display_name(current_user)}")
     
     # Logout button
     if st.button("🚪 ログアウト", use_container_width=True):
+        log_access("logout", current_user)
         st.session_state.authenticated = False
         st.session_state.auth_time = None
-        log_access("logout")
+        st.session_state.username = None
+        st.session_state.user_role = None
         st.rerun()
     
-    # Security settings expander
-    with st.expander("⚙️ セキュリティ設定"):
-        st.caption("パスワード変更")
+    # Password change (for all users)
+    with st.expander("🔑 パスワード変更"):
         old_pw = st.text_input("現在のパスワード", type="password", key="old_pw")
         new_pw = st.text_input("新しいパスワード", type="password", key="new_pw")
         confirm_pw = st.text_input("新しいパスワード(確認)", type="password", key="confirm_pw")
@@ -317,23 +351,56 @@ with st.sidebar:
             if new_pw != confirm_pw:
                 st.error("新しいパスワードが一致しません")
             else:
-                success, msg = change_password(old_pw, new_pw)
+                success, msg = change_password(current_user, old_pw, new_pw)
                 if success:
                     st.success(msg)
                 else:
                     st.error(msg)
-        
+    
+    # ========================
+    # Admin-Only Features
+    # ========================
+    if is_current_admin:
         st.markdown("---")
-        st.caption("📋 アクセスログ（最新10件）")
-        logs = get_access_log(10)
-        if logs:
-            for entry in logs:
-                timestamp = entry['timestamp'][:16].replace('T', ' ')
-                event = entry['event']
-                icon = "✅" if "success" in event else "❌" if "failed" in event else "🔒" if "lock" in event else "📝"
-                st.caption(f"{icon} {timestamp}: {event}")
-        else:
-            st.caption("ログがありません")
+        st.subheader("👑 管理者メニュー")
+        
+        # User Management
+        with st.expander("👥 ユーザー管理"):
+            users = get_all_users()
+            st.caption(f"登録ユーザー数: {len(users)}")
+            
+            for user in users:
+                role_icon = "👑" if user["role"] == "admin" else "👤"
+                lock_icon = "🔒" if user.get("is_locked") else ""
+                st.caption(f"{role_icon} {user['username']} {lock_icon}")
+            
+            st.markdown("---")
+            st.caption("パスワード初期化")
+            reset_target = st.selectbox(
+                "対象ユーザー",
+                [u["username"] for u in users if u["role"] != "admin"],
+                key="reset_target"
+            )
+            if st.button("🔄 パスワード初期化", key="admin_reset"):
+                if reset_target:
+                    success, msg = admin_reset_password(reset_target)
+                    if success:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
+        
+        # Access Logs (Admin only)
+        with st.expander("📋 アクセスログ"):
+            logs = get_access_log(30)
+            if logs:
+                for entry in logs:
+                    timestamp = entry['timestamp'][:16].replace('T', ' ')
+                    event = entry['event']
+                    username = entry.get('username', '')
+                    icon = "✅" if "success" in event else "❌" if "failed" in event else "🔒" if "lock" in event else "📝"
+                    st.caption(f"{icon} {timestamp}: {event} ({username})")
+            else:
+                st.caption("ログがありません")
 
     # 📱 Mobile Access Info
     st.markdown("---")
