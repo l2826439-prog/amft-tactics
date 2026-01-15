@@ -1,0 +1,6 @@
+{
+  "password_hash": "e4a0746a7dafbc3b085d6f4596f97619f67b9c51c7db68787a2f5e1740d00ace",
+  "failed_attempts": 0,
+  "lockout_until": null,
+  "security_enabled": true
+}
