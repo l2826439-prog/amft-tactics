@@ -8,13 +8,9 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Force reload of data_manager to ensure latest code is used
-import importlib
 import src.data_manager
 import src.analyzer
 import src.security
-importlib.reload(src.data_manager)
-importlib.reload(src.analyzer)
-importlib.reload(src.security)
 
 from src.data_manager import load_excel, get_database, update_database, get_statistics
 from src.analyzer import analyze_situation
