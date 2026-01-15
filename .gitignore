@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# Local files (not needed on cloud)
+*.bat
+public_launch.py
+0_START_APP.bat
+start_public_mode.bat
+
+# Keep data folder structure but not contents
+data/*.csv
+data/*.json
+!data/.gitkeep
+
+# Streamlit secrets (if any)
+.streamlit/secrets.toml
